@@ -1,0 +1,162 @@
+# 1. Initialize a new Nuxt 3 project
+npx nuxi init cloud-hub
+cd cloud-hub
+
+# 2. Install necessary dependencies
+npm install @nuxt/ui @nuxt/content @nuxt/devtools @vueuse/core pinia socket.io socket.io-client @nuxt/auth-next
+
+# 3. Create required directories
+mkdir components pages stores assets server/api server/io middleware
+
+# 4. Generate Main Page with Drag-and-Drop File Uploads
+@"
+<template>
+  <div class="hub-container">
+    <header class="header">
+      <h1>Cloud Hub</h1>
+      <button @click="toggleDarkMode">🌙</button>
+    </header>
+
+    <div class="toolbar">
+      <input v-model="searchQuery" placeholder="Search projects..." />
+      <label class="upload">
+        📂 Upload File
+        <input type="file" @change="uploadFile" hidden />
+      </label>
+    </div>
+
+    <div class="grid">
+      <div v-for="project in filteredProjects" :key="project.id" class="card" @click="openProject(project)">
+        <h3>{{ project.title }}</h3>
+        <p>{{ project.description }}</p>
+        <span class="date">{{ project.date }}</span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { useDark, useToggle } from '@vueuse/core'
+import { useProjectsStore } from '@/stores/projects'
+import { io } from "socket.io-client"
+
+const store = useProjectsStore()
+const searchQuery = ref('')
+const isDark = useDark()
+const toggleDarkMode = useToggle(isDark)
+
+const socket = io("http://localhost:3000")
+
+onMounted(() => {
+  socket.on("project-updated", (updatedProjects) => {
+    store.projects = updatedProjects
+  })
+})
+
+const filteredProjects = computed(() =>
+  store.projects.filter(p => p.title.toLowerCase().includes(searchQuery.value.toLowerCase()))
+)
+
+const uploadFile = async (event) => {
+  const file = event.target.files[0]
+  if (file) {
+    const formData = new FormData()
+    formData.append("file", file)
+
+    await fetch("/api/upload", { method: "POST", body: formData })
+  }
+}
+
+const openProject = (project) => {
+  navigateTo(`/projects/${project.id}`)
+}
+</script>
+
+<style>
+.hub-container { max-width: 900px; margin: auto; padding: 20px; }
+.header { display: flex; justify-content: space-between; align-items: center; }
+.toolbar { display: flex; gap: 10px; margin-bottom: 15px; }
+input { padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+.upload { padding: 10px; border: 1px dashed #ddd; cursor: pointer; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+.card { padding: 15px; border-radius: 8px; background: white; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); cursor: pointer; }
+.card:hover { background: #f1f1f1; }
+</style>
+"@ | Out-File -Encoding utf8 "pages/index.vue"
+
+# 5. Create Pinia Store for Projects
+@"
+import { defineStore } from 'pinia'
+
+export const useProjectsStore = defineStore('projects', {
+  state: () => ({
+    projects: []
+  }),
+  actions: {
+    setProjects(projects) {
+      this.projects = projects
+    }
+  }
+})
+"@ | Out-File -Encoding utf8 "stores/projects.ts"
+
+# 6. API Route for Uploading Files
+@"
+export default defineEventHandler(async (event) => {
+  const formData = await readBody(event)
+  const file = formData.get('file')
+  
+  if (!file) {
+    throw createError({ statusCode: 400, statusMessage: 'No file uploaded' })
+  }
+
+  const filePath = \`/uploads/\${file.name}\`
+  await useStorage('assets:content').setItem(filePath, file)
+  
+  return { success: true, filePath }
+})
+"@ | Out-File -Encoding utf8 "server/api/upload.ts"
+
+# 7. API Route for Real-Time Updates
+@"
+import { Server } from 'socket.io'
+
+export default defineEventHandler(async (event) => {
+  const io = new Server(event.node.res.socket.server, { cors: { origin: '*' } })
+
+  io.on('connection', (socket) => {
+    console.log('User connected')
+
+    socket.on('update-projects', async (projects) => {
+      await useStorage('assets:content').setItem('projects.json', projects)
+      io.emit('project-updated', projects)
+    })
+
+    socket.on('disconnect', () => console.log('User disconnected'))
+  })
+})
+"@ | Out-File -Encoding utf8 "server/io/socket.ts"
+
+# 8. Middleware for Authentication (Multi-User Collaboration)
+@"
+export default defineNuxtRouteMiddleware((to, from) => {
+  const user = useNuxtApp().$auth?.user
+  if (!user) return navigateTo('/login')
+})
+"@ | Out-File -Encoding utf8 "middleware/auth.ts"
+
+# 9. Install WebSockets in Nuxt Config
+@"
+export default defineNuxtConfig({
+  modules: ['@nuxt/ui', '@nuxt/auth-next'],
+  runtimeConfig: {
+    public: {
+      websocketUrl: 'http://localhost:3000'
+    }
+  }
+})
+"@ | Out-File -Encoding utf8 "nuxt.config.ts"
+
+# 10. Start the development server
+npm run dev
